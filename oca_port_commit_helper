@@ -31,7 +31,6 @@ def confirm(text):
 
 class BranchesDiff():
     def __init__(self, repo, module, ref1, ref2):
-        repo = git.Repo(repo)
         self.ref1, self.ref2 = ref1, ref2
         self.ref1_commits = self._get_commits(repo.iter_commits(ref1, paths=module))
         self.ref2_commits = self._get_commits(repo.iter_commits(ref2, paths=module))
@@ -64,10 +63,30 @@ class BranchesDiff():
             commits_dict[com] = commit.hexsha
         return commits_dict
 
+def fetch_branches(repo, *branches):
+    """Fetch `branches` of the repositories.
+
+    The way a branch is spelled defines the remote from which it is fetched:
+    - '14.0' => fetch from 'origin'
+    - 'OCA/14.0' => fetch from 'OCA'
+    """
+    for branch in branches:
+        # guess the remote to use
+        remote = "origin"
+        elements = branch.split("/", 1)
+        if len(elements) > 1:
+            remote = elements[0]
+            branch = elements[1]
+        # fetch branches
+        remote_url = repo.remotes[remote].url
+        sys.stdout.write(f"Fetch {remote}/{branch} from {remote_url}\n")
+        repo.remotes[remote].fetch(branch)
+
 if __name__ == "__main__":
-    repo = sys.argv[1]
+    repo = git.Repo(sys.argv[1])
     module = sys.argv[2]
     ref1 = sys.argv[3]
     ref2 = sys.argv[4]
+    fetch_branches(repo, ref1, ref2)
     diff = BranchesDiff(repo, module, ref1, ref2)
     diff.print_commits_to_port()
