@@ -3,7 +3,8 @@ OCA Port Commit Helper
 
 Tool to ease the port of commits (forward port or backport) from one branch to another on OCA.
 
-How to use it:
+How to use it
+=============
 
     $ ./oca_port_commit_helper {REPO_PATH} {MODULE} {FROM_BRANCH} {TO_BRANCH}
 
@@ -20,6 +21,9 @@ $ ./oca_port_commit_helper ~/oca/wms/shopfloor OCA/13.0 OCA/14.0
 [...]
 ```
 
+How it works
+============
+
 As branches are not related to each other (no common history), the following commit attributes are used to uniquely identify a commit among two branches:
 
 - `author name`
@@ -28,3 +32,5 @@ As branches are not related to each other (no common history), the following com
 - `message`
 
 These attribute values should not change over time even if the commit has been cherry-picked or rebased.
+
+Some commits are ignored on purpose like the ones created by OCA bots, the update of translations and merge commits.
