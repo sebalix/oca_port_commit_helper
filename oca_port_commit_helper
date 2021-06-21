@@ -2,11 +2,14 @@
 # Copyright 2021 Camptocamp SA
 # License LGPL-3.0 or later (http://www.gnu.org/licenses/lgpl)
 
-from collections import namedtuple
+from collections import defaultdict, namedtuple
+from datetime import datetime
+import os
 import sys
 
 # use GitPython
 import git
+import requests
 
 
 AUTHOR_EMAILS_TO_SKIP = [
@@ -20,7 +23,14 @@ SUMMARY_TERMS_TO_SKIP = [
     "Added translation using Weblate",
 ]
 
+GITHUB_API_URL = "https://api.github.com"
+GH_API_URL = "https://api.github.com"
+
+OCA_ORG = "OCA"
+
 Commit = namedtuple("Commit", "author_name author_email authored_datetime summary message")
+
+PullRequest = namedtuple("PullRequest", "url title body merged_at")
 
 
 def confirm(text):
@@ -29,19 +39,65 @@ def confirm(text):
 
 
 class BranchesDiff():
-    def __init__(self, repo, module, ref1, ref2):
+    def __init__(self, repo, repo_name, module, ref1, ref2):
+        self.repo = repo
+        self.repo_name = repo_name
         self.ref1, self.ref2 = ref1, ref2
         self.ref1_commits = self._get_commits(repo.iter_commits(ref1, paths=module))
         self.ref2_commits = self._get_commits(repo.iter_commits(ref2, paths=module))
 
     def print_commits_to_port(self):
         commits_to_port = self.get_commits_to_port()
-        print(f"{len(commits_to_port)} commits to port from {self.ref1} to {self.ref2}\n")
-        for commit in commits_to_port:
-            print(f"{self.ref1_commits[commit]} {commit.summary}")
+        lines_to_print = []
+        counter = 0
+        for pr in commits_to_port:
+            lines_to_print.append(f"\n{pr.merged_at}: {pr.title} ({pr.url or '(no PR)'}):")
+            for commit in commits_to_port[pr]:
+                lines_to_print.append(
+                    f"\t{self.ref1_commits[commit]['hexsha']} {commit.summary}"
+                )
+                counter += 1
+        lines_to_print.insert(0, f"{counter} commits to port from {self.ref1} to {self.ref2}")
+        print("\n".join(lines_to_print))
 
     def get_commits_to_port(self):
-        return [x for x in self.ref1_commits if x not in self.ref2_commits]
+        commits_by_pr = defaultdict(dict)
+        for commit in self.ref1_commits:
+            if commit in self.ref2_commits:
+                continue
+            # Get related Pull Request if any
+            pr_url = pr_title = pr_body = ""
+            pr_merge_date = self.ref1_commits[commit]["committed_datetime"]
+            hexsha = self.ref1_commits[commit]["hexsha"]
+            if any("github.com" in remote.url for remote in self.repo.remotes):
+                request_url = f"{GH_API_URL}/repos/{OCA_ORG}/{self.repo_name}/commits/{hexsha}/pulls"
+                headers = {"Accept": "application/vnd.github.groot-preview+json"}
+                if os.environ.get("GITHUB_TOKEN"):
+                    token = os.environ.get("GITHUB_TOKEN")
+                    headers.update({"Authorization": f"token {token}"})
+                response = requests.get(request_url, headers=headers)
+                if not response.ok:
+                    raise RuntimeError(response.text)
+                res = response.json()
+                if res:
+                    pr_url = res[0]["html_url"]
+                    pr_title = res[0]["title"]
+                    pr_body = res[0]["body"]
+                    pr_merge_date = datetime.fromisoformat(
+                        res[0]["merged_at"][:-1]    # Remove 'Z' suffix
+                    )
+                pr = PullRequest(
+                    url=pr_url, title=pr_title, body=pr_body, merged_at=pr_merge_date
+                )
+                commits_by_pr[pr][commit] = self.ref1_commits[commit]
+            else:
+                # FIXME log
+                pass
+        # Sort PRs on the merge date
+        sorted_commits_by_pr = {}
+        for pr in sorted(commits_by_pr, key=lambda pr: pr.merged_at):
+            sorted_commits_by_pr[pr] = commits_by_pr[pr]
+        return sorted_commits_by_pr
 
     def _get_commits(self, commits):
         """Filter out undesirable commits and return a dict `{Commit: SHA, ...}`."""
@@ -62,8 +118,12 @@ class BranchesDiff():
                 summary=commit.summary,
                 message=commit.message,
             )
-            commits_dict[com] = commit.hexsha
+            commits_dict[com] = {
+                "hexsha": commit.hexsha,
+                "committed_datetime": commit.committed_datetime.replace(tzinfo=None),
+            }
         return commits_dict
+
 
 def fetch_branches(repo, *branches):
     """Fetch `branches` of the repositories.
@@ -84,11 +144,13 @@ def fetch_branches(repo, *branches):
         sys.stdout.write(f"Fetch {remote}/{branch} from {remote_url}\n")
         repo.remotes[remote].fetch(branch)
 
+
 if __name__ == "__main__":
     repo = git.Repo(sys.argv[1])
-    module = sys.argv[2]
-    ref1 = sys.argv[3]
-    ref2 = sys.argv[4]
+    repo_name = sys.argv[2]
+    module = sys.argv[3]
+    ref1 = sys.argv[4]
+    ref2 = sys.argv[5]
     fetch_branches(repo, ref1, ref2)
-    diff = BranchesDiff(repo, module, ref1, ref2)
+    diff = BranchesDiff(repo, repo_name, module, ref1, ref2)
     diff.print_commits_to_port()
